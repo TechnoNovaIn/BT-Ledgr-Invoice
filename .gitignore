@@ -1,0 +1,22 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+dist-ssr/
+
+# Local env / secrets
+.env
+.env.local
+backend/.env
+
+# Uploaded files & runtime logs
+uploads/
+logs/
+*.log
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
+*.suo

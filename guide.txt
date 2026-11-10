@@ -1,0 +1,120 @@
+================================================================================
+Bills — Statements  ·  Invoice ↔ Bank-Statement Reconciliation (Offline)
+================================================================================
+
+This is a full-stack tool that:
+  1. Extracts structured data from Indian GST invoices (PDF or scanned images)
+     using local OCR (Tesseract) + a rule-based regex parser. NO external LLM.
+  2. Extracts transactions from a bank or ledger statement (PDF/image).
+  3. Reconciles each invoice against the statement, primarily by INVOICE NUMBER
+     found in the statement narration, with amount / vendor / date-proximity as
+     supporting checks.
+  4. Flags mismatches for manual review/override.
+
+Everything runs locally — no cloud calls, no Ollama, no API keys.
+
+
+--------------------------------------------------------------------------------
+PREREQUISITES
+--------------------------------------------------------------------------------
+  • Node.js 18+  (tested on 18/20)
+  • PostgreSQL 12+  (local or Docker)
+  • Git
+  • ~1–2 GB free disk (for node_modules + Tesseract trained data)
+
+
+--------------------------------------------------------------------------------
+1) BACKEND SETUP
+--------------------------------------------------------------------------------
+  cd backend
+
+  # install dependencies
+  npm install
+
+  # configure the database + app
+  #  - copy the example env and edit DATABASE_URL to point at YOUR postgres
+  cp .env.example .env
+  #  edit .env and set:
+  #    DATABASE_URL="postgresql://USER:PASSWORD@localhost:5432/invoice_db"
+  #  (create the database first, e.g.  createdb invoice_db)
+
+  # generate the Prisma client and create the tables
+  npx prisma generate
+  npx prisma migrate dev --name init
+
+  # start the API (http://localhost:4000)
+  npm run dev          # or: npm start
+
+
+--------------------------------------------------------------------------------
+2) FRONTEND SETUP
+--------------------------------------------------------------------------------
+  cd frontend
+
+  npm install
+
+  # Vite dev server (http://localhost:5173 by default)
+  npm run dev
+
+  # for production build:
+  npm run build
+  npm run preview
+
+
+--------------------------------------------------------------------------------
+3) RUNNING END-TO-END
+--------------------------------------------------------------------------------
+  1. Start PostgreSQL, create the `invoice_db` database.
+  2. Start the backend  (backend: npm run dev  → :4000)
+  3. Start the frontend (frontend: npm run dev  → :5173)
+  4. Open the frontend in your browser.
+
+  Workflow:
+    • Upload Invoices  → files are OCR'd + parsed, line items captured as an
+      editable "soft copy" with unit price / taxable / tax / total.
+    • Upload a Statement → pick the invoice batch to reconcile against
+      (optional). When the statement finishes processing, validation runs
+      automatically for that batch.
+    • Validate page → pick a batch + statement manually if you skipped linking.
+      See per-check results (amount, vendor, date, GSTIN, invoice-ref) and
+      override mismatches.
+    • Invoices / Detail → review extracted fields, fix any "missing required
+      field" warnings, confirm.
+
+
+--------------------------------------------------------------------------------
+HOW MATCHING WORKS
+--------------------------------------------------------------------------------
+  For each invoice, the reconciler looks for a statement transaction whose
+  narration (or extracted invoice-ref) contains the invoice number. If found,
+  that is the primary match. If the paid amount does not equal the grand total,
+  it is a hard MISMATCH. If no invoice number is present in the statement, it
+  falls back to a weighted fuzzy match:
+      amount 35% · invoice-ref 30% · vendor 20% · date-proximity 10%.
+  Date window: payment allowed from 7 days before to 365 days after the
+  invoice date (configurable in backend/.env: AMOUNT_TOLERANCE_PERCENT,
+  VENDOR_MATCH_THRESHOLD).
+
+
+--------------------------------------------------------------------------------
+CONFIG (backend/.env)
+--------------------------------------------------------------------------------
+  DATABASE_URL              PostgreSQL connection string
+  PORT                      API port (default 4000)
+  UPLOAD_DIR, MAX_FILE_SIZE_MB, ALLOWED_MIME_TYPES
+  VENDOR_MATCH_THRESHOLD    fuzzy vendor similarity 0–1 (default 0.75)
+  AMOUNT_TOLERANCE_PERCENT  allowed amount diff (default 0.01 = 1%)
+
+  NOTE: Ollama settings in .env are ignored — extraction is fully offline.
+
+
+--------------------------------------------------------------------------------
+TROUBLESHOOTING
+--------------------------------------------------------------------------------
+  • OCR poor? ensure backend/eng.traineddata exists (it does by default).
+  • "missing required fields" banner → edit the invoice and save; extraction
+    is regex-based and may miss unusual layouts.
+  • Prisma errors after pull → run `npx prisma generate && npx prisma migrate dev`.
+  • Backend won't start → confirm Postgres is running and DATABASE_URL is correct.
+
+================================================================================

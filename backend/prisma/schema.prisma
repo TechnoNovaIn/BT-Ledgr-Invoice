@@ -1,0 +1,220 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Upload Batch ────────────────────────────────────────────────────────────
+model UploadBatch {
+  id          String        @id @default(uuid())
+  createdAt   DateTime      @default(now())
+  uploads     InvoiceUpload[]
+  statements  StatementUpload[]
+}
+
+// ─── Individual invoice file upload ─────────────────────────────────────────
+model InvoiceUpload {
+  id           String       @id @default(uuid())
+  batchId      String
+  batch        UploadBatch  @relation(fields: [batchId], references: [id])
+  fileName     String
+  filePath     String
+  mimeType     String
+  status       UploadStatus @default(PROCESSING)
+  errorMessage String?
+  invoice      Invoice?
+  createdAt    DateTime     @default(now())
+
+  @@index([batchId])
+  @@index([status])
+}
+
+// ─── Extracted Invoice ───────────────────────────────────────────────────────
+model Invoice {
+  id               String        @id @default(uuid())
+  uploadId         String        @unique
+  upload           InvoiceUpload @relation(fields: [uploadId], references: [id])
+
+  // Header fields
+  invoiceNumber    String?
+  invoiceDate      DateTime?
+  dueDate          DateTime?
+
+  // Vendor
+  vendorName       String?
+  vendorAddress    String?
+  vendorGSTIN      String?
+  vendorPAN        String?
+
+  // Buyer
+  buyerName        String?
+  buyerAddress     String?
+  buyerGSTIN       String?
+
+  // Totals
+  totalTaxable     Decimal?  @db.Decimal(14, 2)
+  totalCGST        Decimal?  @db.Decimal(14, 2)
+  totalSGST        Decimal?  @db.Decimal(14, 2)
+  totalIGST        Decimal?  @db.Decimal(14, 2)
+  totalCess        Decimal?  @db.Decimal(14, 2)
+  roundOff         Decimal?  @db.Decimal(8, 2)
+  grandTotal       Decimal?  @db.Decimal(14, 2)
+
+  // Meta
+  extractionMethod ExtractionMethod @default(REGEX)
+  extractionRaw    Json?            // raw JSON from extractor
+  invoiceStatus    InvoiceStatus    @default(PENDING)
+  
+  lineItems        LineItem[]
+  validationResult ValidationResult?
+
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  @@index([invoiceStatus])
+  @@index([invoiceNumber])
+  @@index([vendorName])
+  @@index([createdAt])
+  @@index([invoiceDate])
+}
+
+// ─── Line Items ───────────────────────────────────────────────────────────────
+model LineItem {
+  id             String   @id @default(uuid())
+  invoiceId      String
+  invoice        Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  slNo           Int?
+  description    String?
+  hsnSac         String?
+  quantity       Decimal? @db.Decimal(12, 3)
+  unit           String?
+  rateInclTax    Decimal? @db.Decimal(14, 2)
+  rateExclTax    Decimal? @db.Decimal(14, 2)
+  taxableAmount  Decimal? @db.Decimal(14, 2)
+  cgstRate       Decimal? @db.Decimal(5, 2)
+  cgstAmount     Decimal? @db.Decimal(14, 2)
+  sgstRate       Decimal? @db.Decimal(5, 2)
+  sgstAmount     Decimal? @db.Decimal(14, 2)
+  igstRate       Decimal? @db.Decimal(5, 2)
+  igstAmount     Decimal? @db.Decimal(14, 2)
+  cessRate       Decimal? @db.Decimal(5, 2)
+  cessAmount     Decimal? @db.Decimal(14, 2)
+  totalAmount    Decimal? @db.Decimal(14, 2)
+}
+
+// ─── Statement Upload ─────────────────────────────────────────────────────────
+model StatementUpload {
+  id           String          @id @default(uuid())
+  batchId      String
+  batch        UploadBatch     @relation(fields: [batchId], references: [id])
+  fileName     String
+  filePath     String
+  statementType StatementType
+  status       UploadStatus    @default(PROCESSING)
+  errorMessage String?
+  transactions Transaction[]
+  createdAt    DateTime        @default(now())
+}
+
+// ─── Parsed Statement Transactions ───────────────────────────────────────────
+model Transaction {
+  id              String          @id @default(uuid())
+  statementId     String
+  statement       StatementUpload @relation(fields: [statementId], references: [id], onDelete: Cascade)
+
+  transactionDate DateTime?
+  valueDate       DateTime?
+  narration       String?         // full narration/description text
+  referenceNo     String?         // cheque no / UTR / ref extracted from narration
+  debit           Decimal?        @db.Decimal(14, 2)
+  credit          Decimal?        @db.Decimal(14, 2)
+  balance         Decimal?        @db.Decimal(14, 2)
+
+  // Ledger-specific
+  vendorName      String?
+  vendorGSTIN     String?
+  invoiceRef      String?         // invoice number found in narration
+
+  validationResults ValidationResult[]
+  createdAt       DateTime        @default(now())
+
+  @@index([statementId])
+  @@index([transactionDate])
+  @@index([invoiceRef])
+}
+
+// ─── Validation Result (invoice ↔ statement) ─────────────────────────────────
+model ValidationResult {
+  id                String            @id @default(uuid())
+  invoiceId         String            @unique
+  invoice           Invoice           @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  transactionId     String?
+  transaction       Transaction?      @relation(fields: [transactionId], references: [id])
+
+  // Per-check results
+  amountMatch       Boolean?
+  amountInvoice     Decimal?          @db.Decimal(14, 2)
+  amountStatement   Decimal?          @db.Decimal(14, 2)
+  amountDiff        Decimal?          @db.Decimal(14, 2)
+
+  vendorMatch       Boolean?
+  vendorInvoice     String?
+  vendorStatement   String?
+
+  dateCheck         Boolean?
+  invoiceDate       DateTime?
+  paymentDate       DateTime?
+  daysDiff          Int?
+
+  gstinMatch        Boolean?
+  gstinInvoice      String?
+  gstinStatement    String?
+
+  invoiceRefMatch   Boolean?
+  invoiceRefFound   String?
+
+  // Overall
+  overallStatus     ValidationStatus  @default(PENDING)
+  notes             String?
+
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+
+  @@index([overallStatus])
+  @@index([transactionId])
+}
+
+// ─── Enums ────────────────────────────────────────────────────────────────────
+enum UploadStatus {
+  PROCESSING
+  DONE
+  FAILED
+}
+
+enum InvoiceStatus {
+  PENDING       // extracted, not yet validated
+  VALIDATED     // all checks passed
+  MISMATCH      // one or more checks failed — saved for review
+  CONFIRMED     // user reviewed and confirmed
+}
+
+enum ExtractionMethod {
+  REGEX
+  OLLAMA
+}
+
+enum StatementType {
+  BANK
+  LEDGER
+}
+
+enum ValidationStatus {
+  PENDING
+  PASSED
+  MISMATCH
+  PARTIAL
+}
